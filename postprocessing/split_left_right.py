@@ -1,5 +1,5 @@
 # ============================================================
-# SPLIT BILATERAL MUSCLE LABELS INTO LEFT / RIGHT
+# SPLIT BILATERAL MUSCLE LABELS INTO ONE L/R MULTILABEL NIFTI
 # ============================================================
 
 from pathlib import Path
@@ -11,25 +11,32 @@ from scipy import ndimage
 
 
 # ------------------------------------------------------------
-# nnU-Net label map
+# INPUT nnU-Net labels
+# ------------------------------------------------------------
+# 0 = background
+# 1 = psoas
+# 2 = quadratus lumborum
+# 3 = erector spinae
+# 4 = multifidus
+# 5 = epifascial fat
+
+
+# ------------------------------------------------------------
+# OUTPUT labels
 # ------------------------------------------------------------
 
-LABELS = {
-    1: "PS",   # Psoas
-    2: "QL",   # Quadratus lumborum
-    3: "ES",   # Erector spinae
-    4: "MF",   # Multifidus
+OUTPUT_LABELS = {
+    1: ("LPS", 1, 2),
+    2: ("LQL", 3, 4),
+    3: ("LES", 5, 6),
+    4: ("LMF", 7, 8),
 }
 
-EPIFASCIAL_FAT_LABEL = 5
+EPIFASCIAL_FAT_INPUT = 5
+EPIFASCIAL_FAT_OUTPUT = 9
 
-
-# ------------------------------------------------------------
-# Helper
-# ------------------------------------------------------------
 
 def world_x(affine, voxel):
-    """Return RAS world-coordinate x position."""
     return nib.affines.apply_affine(
         affine,
         np.asarray(voxel, dtype=float)
@@ -41,10 +48,9 @@ def split_left_right(seg_img, label_value):
     data = np.asarray(seg_img.dataobj)
     mask = data == label_value
 
-    left = np.zeros(mask.shape, dtype=np.uint8)
-    right = np.zeros(mask.shape, dtype=np.uint8)
+    left = np.zeros(mask.shape, dtype=bool)
+    right = np.zeros(mask.shape, dtype=bool)
 
-    # Determine superior-inferior array axis from affine
     axcodes = nib.aff2axcodes(seg_img.affine)
 
     try:
@@ -57,7 +63,6 @@ def split_left_right(seg_img, label_value):
             f"Could not identify superior-inferior axis: {axcodes}"
         )
 
-    # Move slice axis to the final dimension
     mask_m = np.moveaxis(mask, si_axis, -1)
     left_m = np.moveaxis(left, si_axis, -1)
     right_m = np.moveaxis(right, si_axis, -1)
@@ -67,8 +72,8 @@ def split_left_right(seg_img, label_value):
         if i != si_axis
     ]
 
-    # World-coordinate position of image centre.
     centre_voxel = (np.asarray(mask.shape) - 1) / 2
+
     image_mid_x = world_x(
         seg_img.affine,
         centre_voxel
@@ -81,7 +86,6 @@ def split_left_right(seg_img, label_value):
         if not np.any(current):
             continue
 
-        # 8-connected components within the axial slice
         components, n_components = ndimage.label(
             current,
             structure=np.ones((3, 3), dtype=np.uint8)
@@ -101,6 +105,7 @@ def split_left_right(seg_img, label_value):
             centroid_2d = coords.mean(axis=0)
 
             voxel = np.zeros(3, dtype=float)
+
             voxel[remaining_axes[0]] = centroid_2d[0]
             voxel[remaining_axes[1]] = centroid_2d[1]
             voxel[si_axis] = z
@@ -114,16 +119,11 @@ def split_left_right(seg_img, label_value):
         if not component_info:
             continue
 
-        # ----------------------------------------------------
-        # Estimate left/right division
-        # ----------------------------------------------------
-
         largest = max(
             item["size"]
             for item in component_info
         )
 
-        # Ignore tiny islands when estimating the midline
         major = [
             item for item in component_info
             if item["size"] >= max(10, 0.10 * largest)
@@ -131,22 +131,14 @@ def split_left_right(seg_img, label_value):
 
         if len(major) >= 2:
 
-            xs = [
-                item["x"]
-                for item in major
-            ]
+            xs = [item["x"] for item in major]
 
             split_x = (
                 min(xs) + max(xs)
             ) / 2
 
         else:
-            # If only one component is visible, use image centre
             split_x = image_mid_x
-
-        # In RAS coordinates:
-        # smaller x = anatomical LEFT
-        # larger x  = anatomical RIGHT
 
         for item in component_info:
 
@@ -154,53 +146,60 @@ def split_left_right(seg_img, label_value):
                 components == item["id"]
             )
 
+            # RAS coordinates:
+            # negative/smaller x = anatomical LEFT
+            # positive/larger x = anatomical RIGHT
+
             if item["x"] < split_x:
-                left_m[..., z][component_mask] = 1
+                left_m[..., z][component_mask] = True
             else:
-                right_m[..., z][component_mask] = 1
+                right_m[..., z][component_mask] = True
 
     return left, right
 
-
-# ============================================================
-# MAIN
-# ============================================================
 
 def main():
 
     parser = argparse.ArgumentParser(
         description=(
-            "Split bilateral paraspinal muscle labels "
-            "into anatomical left and right masks."
+            "Convert bilateral paraspinal muscle labels "
+            "into one left/right multilabel NIfTI."
         )
     )
 
     parser.add_argument(
         "--seg",
         required=True,
-        help="nnU-Net segmentation (.nii or .nii.gz)"
+        help="Input nnU-Net segmentation (.nii or .nii.gz)"
     )
 
     parser.add_argument(
         "--out",
         required=True,
-        help="Output directory"
+        help="Output multilabel NIfTI (.nii.gz)"
     )
 
     args = parser.parse_args()
 
     seg_path = Path(args.seg)
-    output_dir = Path(args.out)
+    output_path = Path(args.out)
 
     if not seg_path.exists():
         raise FileNotFoundError(seg_path)
 
-    output_dir.mkdir(
+    output_path.parent.mkdir(
         parents=True,
         exist_ok=True
     )
 
     seg_img = nib.load(seg_path)
+
+    data = np.asarray(seg_img.dataobj)
+
+    output = np.zeros(
+        data.shape,
+        dtype=np.uint8
+    )
 
     print(
         "NIfTI orientation:",
@@ -208,76 +207,67 @@ def main():
     )
 
     # --------------------------------------------------------
-    # Split muscles
+    # Split four muscle groups
     # --------------------------------------------------------
 
-    for label_value, abbreviation in LABELS.items():
+    for input_label, (
+        name,
+        left_label,
+        right_label
+    ) in OUTPUT_LABELS.items():
 
         left, right = split_left_right(
             seg_img,
-            label_value
+            input_label
         )
 
-        for side, mask in [
-            ("L", left),
-            ("R", right),
-        ]:
+        output[left] = left_label
+        output[right] = right_label
 
-            output_path = (
-                output_dir /
-                f"{side}{abbreviation}.nii.gz"
-            )
-
-            out_img = nib.Nifti1Image(
-                mask,
-                seg_img.affine,
-                seg_img.header
-            )
-
-            out_img.set_data_dtype(np.uint8)
-
-            nib.save(
-                out_img,
-                output_path
-            )
-
-            print(
-                f"Saved: {output_path}"
-            )
+        print(
+            f"{name}: "
+            f"L={left_label}, R={right_label}"
+        )
 
     # --------------------------------------------------------
-    # Epifascial fat remains bilateral / total
+    # Epifascial fat remains bilateral
     # --------------------------------------------------------
 
-    data = np.asarray(seg_img.dataobj)
+    output[
+        data == EPIFASCIAL_FAT_INPUT
+    ] = EPIFASCIAL_FAT_OUTPUT
 
-    fat = (
-        data == EPIFASCIAL_FAT_LABEL
-    ).astype(np.uint8)
+    # --------------------------------------------------------
+    # Save one multilabel segmentation
+    # --------------------------------------------------------
 
-    fat_img = nib.Nifti1Image(
-        fat,
+    out_img = nib.Nifti1Image(
+        output,
         seg_img.affine,
         seg_img.header
     )
 
-    fat_img.set_data_dtype(np.uint8)
-
-    fat_path = (
-        output_dir /
-        "FA.nii.gz"
-    )
+    out_img.set_data_dtype(np.uint8)
 
     nib.save(
-        fat_img,
-        fat_path
+        out_img,
+        output_path
     )
 
-    print(
-        f"Saved: {fat_path}"
-    )
+    print("\nSaved:")
+    print(output_path)
 
-    print("\nFinished.")
+    print("\nOutput labels:")
+    print("0 = Background")
+    print("1 = Left psoas")
+    print("2 = Right psoas")
+    print("3 = Left quadratus lumborum")
+    print("4 = Right quadratus lumborum")
+    print("5 = Left erector spinae")
+    print("6 = Right erector spinae")
+    print("7 = Left multifidus")
+    print("8 = Right multifidus")
+    print("9 = Epifascial fat")
 
 
 if __name__ == "__main__":
