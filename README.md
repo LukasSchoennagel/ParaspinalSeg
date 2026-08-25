@@ -1,41 +1,220 @@
 # Open-Source Paraspinal Muscle Segmentation on Lumbar MRI Using nnU-Net
-Open-source nnU-Net model for automated segmentation of lumbar paraspinal muscles and epifascial fat on axial T2-weighted MRI.
+
+Open-source **nnU-Net v2** model for automated segmentation of lumbar paraspinal muscles and epifascial fat on axial T2-weighted MRI.
+
+The model was developed and evaluated in **664 lumbar MRI examinations** using participant-level five-fold cross-validation.
 
 ## Segmented structures
 
-The model provides separate segmentations of:
+The model segments:
 
-- Psoas
-- Quadratus lumborum
-- Erector spinae
-- Multifidus
-- Epifascial fat
+* Psoas (PS)
+* Quadratus lumborum (QL)
+* Erector spinae (ES)
+* Multifidus (MF)
+* Epifascial fat
 
-### Label map
+### nnU-Net output labels
 
-| Label | Structure |
-|------:|-----------|
-| 0 | Background |
-| 1 | Psoas |
-| 2 | Quadratus lumborum |
-| 3 | Erector spinae |
-| 4 | Multifidus |
-| 5 | Epifascial fat |
+The trained nnU-Net model predicts bilateral structures using a single label for each anatomical compartment.
+
+| Label | Structure          |
+| ----: | ------------------ |
+|     0 | Background         |
+|     1 | Psoas              |
+|     2 | Quadratus lumborum |
+|     3 | Erector spinae     |
+|     4 | Multifidus         |
+|     5 | Epifascial fat     |
+
+Left- and right-sided structures can subsequently be separated using the included post-processing script described below.
+
+---
 
 ## Model
 
-The final model is based on **nnU-Net v2** using a 2D configuration.
+The final model uses **nnU-Net v2 with a 2D configuration**.
 
-It was developed and evaluated using participant-level five-fold cross-validation on axial T2-weighted lumbar MRI.
+A three-slice 2.5D configuration incorporating the directly adjacent cranial and caudal slices was also evaluated but did not provide a relevant improvement in segmentation performance. The simpler 2D model was therefore selected for the final release.
 
-## Availability
+The released model contains all five cross-validation folds.
 
-Trained model weights and instructions for inference will be provided in this repository.
+### Segmentation performance
+
+Mean Dice coefficients in out-of-fold evaluation were:
+
+| Structure          | Mean Dice |
+| ------------------ | --------: |
+| Erector spinae     |     0.945 |
+| Psoas              |     0.940 |
+| Multifidus         |     0.928 |
+| Quadratus lumborum |     0.889 |
+| Epifascial fat     |     0.564 |
+
+Despite lower spatial overlap for epifascial fat, agreement for total epifascial fat area remained high (ICC 0.888).
+
+---
+
+## Model download
+
+The trained model is available from the latest GitHub release:
+
+**https://github.com/LukasSchoennagel/ParaspinalSeg/releases/latest**
+
+Download:
+
+```text
+ParaspinalMuscle_nnUNet_2D.zip
+```
+
+The archive contains all five trained cross-validation folds together with the corresponding nnU-Net plans and dataset configuration.
+
+---
+
+## Quick Start
+
+### 1. Install nnU-Net v2
+
+A working Python environment with PyTorch and nnU-Net v2 is required.
+
+```bash
+pip install nnunetv2
+```
+
+The standard nnU-Net environment variables, particularly `nnUNet_results`, must be configured before installing the model.
+
+### 2. Install the pretrained model
+
+After downloading `ParaspinalMuscle_nnUNet_2D.zip`:
+
+```bash
+nnUNetv2_install_pretrained_model_from_zip ParaspinalMuscle_nnUNet_2D.zip
+```
+
+This installs the pretrained model into the configured `nnUNet_results` directory.
+
+### 3. Prepare input images
+
+The model expects axial T2-weighted lumbar MRI in NIfTI format.
+
+Because this is a single-channel nnU-Net model, input filenames must follow the nnU-Net convention:
+
+```text
+patient001_0000.nii.gz
+patient002_0000.nii.gz
+patient003_0000.nii.gz
+```
+
+Example input directory:
+
+```text
+input/
+├── patient001_0000.nii.gz
+├── patient002_0000.nii.gz
+└── patient003_0000.nii.gz
+```
+
+### 4. Run inference
+
+```bash
+nnUNetv2_predict -i INPUT_FOLDER -o OUTPUT_FOLDER -d 4 -c 2d -f 0 1 2 3 4
+```
+
+This uses all five available cross-validation folds for inference.
+
+Example output:
+
+```text
+output/
+├── patient001.nii.gz
+├── patient002.nii.gz
+└── patient003.nii.gz
+```
+
+Each output file contains the five bilateral foreground labels listed above.
+
+---
+
+## Left–right post-processing
+
+Left and right muscles share the same segmentation label in the trained nnU-Net model.
+
+For side-specific analyses, this repository provides:
+
+```text
+postprocessing/split_left_right.py
+```
+
+The script converts the bilateral nnU-Net prediction into **one multilabel NIfTI file with separate anatomical left and right labels**.
+
+Example:
+
+```bash
+python postprocessing/split_left_right.py --seg patient001.nii.gz --out patient001_LR.nii.gz
+```
+
+### Left–right output labels
+
+| Label | Structure                |
+| ----: | ------------------------ |
+|     0 | Background               |
+|     1 | Left psoas               |
+|     2 | Right psoas              |
+|     3 | Left quadratus lumborum  |
+|     4 | Right quadratus lumborum |
+|     5 | Left erector spinae      |
+|     6 | Right erector spinae     |
+|     7 | Left multifidus          |
+|     8 | Right multifidus         |
+|     9 | Left epifascial fat      |
+|    10 | Right epifascial fat     |
+
+Left/right assignment is derived from the spatial information stored in the NIfTI affine rather than from raw array position. Correct image orientation should nevertheless be verified when using images generated by different DICOM-to-NIfTI conversion or preprocessing pipelines.
+
+The original bilateral nnU-Net prediction remains unchanged.
+
+---
+
+## Example workflow
+
+```text
+Axial T2-weighted MRI
+        ↓
+patient001_0000.nii.gz
+        ↓
+nnU-Net inference
+        ↓
+patient001.nii.gz
+        ↓
+Left/right post-processing
+        ↓
+patient001_LR.nii.gz
+```
+
+---
+
+## Intended use
+
+The model is intended for automated segmentation and research-scale analysis of lumbar paraspinal musculature on axial T2-weighted MRI.
+
+Its detailed separation of individual muscle compartments enables muscle- and level-specific analysis in larger imaging cohorts without requiring manual delineation of every examination.
+
+The model was developed using standardized axial lumbar MRI from a prospective cohort. Independent validation is recommended before application to substantially different MRI sequences, acquisition protocols, patient populations, or postoperative anatomy.
+
+This software is provided for **research use** and is not intended to independently establish diagnoses or clinical treatment decisions.
+
+---
 
 ## Citation
 
 Publication information will be added following publication.
 
-## Intended use
+Until then, please reference this repository when using the model:
 
-The model is provided for research use. Independent validation is recommended before application to substantially different imaging protocols or clinical populations.
+**https://github.com/LukasSchoennagel/ParaspinalSeg**
+
+---
+
+## License
+
+This project is released under the **Apache License 2.0**.
