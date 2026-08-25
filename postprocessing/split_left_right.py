@@ -26,15 +26,15 @@ from scipy import ndimage
 # ------------------------------------------------------------
 
 OUTPUT_LABELS = {
-    1: ("LPS", 1, 2),
-    2: ("LQL", 3, 4),
-    3: ("LES", 5, 6),
-    4: ("LMF", 7, 8),
+    1: ("PS", 1, 2),
+    2: ("QL", 3, 4),
+    3: ("ES", 5, 6),
+    4: ("MF", 7, 8),
 }
 
 EPIFASCIAL_FAT_INPUT = 5
-EPIFASCIAL_FAT_OUTPUT = 9
-
+EPIFASCIAL_FAT_LEFT = 9
+EPIFASCIAL_FAT_RIGHT = 10
 
 def world_x(affine, voxel):
     return nib.affines.apply_affine(
@@ -230,12 +230,49 @@ def main():
         )
 
     # --------------------------------------------------------
-    # Epifascial fat remains bilateral
+    # Split epifascial fat by anatomical left/right position
     # --------------------------------------------------------
-
-    output[
-        data == EPIFASCIAL_FAT_INPUT
-    ] = EPIFASCIAL_FAT_OUTPUT
+    
+    fat_mask = data == EPIFASCIAL_FAT_INPUT
+    
+    # voxel coordinates of all epifascial-fat voxels
+    coords = np.argwhere(fat_mask)
+    
+    if len(coords) > 0:
+    
+        # anatomical x-coordinate of image centre
+        centre_voxel = (np.asarray(data.shape) - 1) / 2
+    
+        image_mid_x = world_x(
+            seg_img.affine,
+            centre_voxel
+        )
+    
+        # transform fat voxels into world coordinates
+        world_coords = nib.affines.apply_affine(
+            seg_img.affine,
+            coords
+        )
+    
+        # RAS convention:
+        # smaller x = anatomical LEFT
+        # larger x  = anatomical RIGHT
+    
+        left_coords = coords[
+            world_coords[:, 0] < image_mid_x
+        ]
+    
+        right_coords = coords[
+            world_coords[:, 0] >= image_mid_x
+        ]
+    
+        output[
+            tuple(left_coords.T)
+        ] = EPIFASCIAL_FAT_LEFT
+    
+        output[
+            tuple(right_coords.T)
+        ] = EPIFASCIAL_FAT_RIGHT
 
     # --------------------------------------------------------
     # Save one multilabel segmentation
@@ -258,16 +295,17 @@ def main():
     print(output_path)
 
     print("\nOutput labels:")
-    print("0 = Background")
-    print("1 = Left psoas")
-    print("2 = Right psoas")
-    print("3 = Left quadratus lumborum")
-    print("4 = Right quadratus lumborum")
-    print("5 = Left erector spinae")
-    print("6 = Right erector spinae")
-    print("7 = Left multifidus")
-    print("8 = Right multifidus")
-    print("9 = Epifascial fat")
+    print("0  = Background")
+    print("1  = Left psoas")
+    print("2  = Right psoas")
+    print("3  = Left quadratus lumborum")
+    print("4  = Right quadratus lumborum")
+    print("5  = Left erector spinae")
+    print("6  = Right erector spinae")
+    print("7  = Left multifidus")
+    print("8  = Right multifidus")
+    print("9  = Left epifascial fat")
+    print("10 = Right epifascial fat")
 
 
 if __name__ == "__main__":
